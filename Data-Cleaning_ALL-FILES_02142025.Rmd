@@ -1,0 +1,714 @@
+---
+title: "Data Cleaning and Transformation Robins-Wardell_03052025"
+output: html_notebook
+---
+
+This notebook is the documentation of how the data was cleaned for the dissertation: Advancing real-time risk stratification: Evaluating the associations between comorbidities and hospitalization outcomes in patients with multimorbidity.Due to an error with the generation of combinations, I've restarted this notebook for cleaner code. 
+
+##Step 0: Pre-Processing
+
+###Find and Set (if necessary) the working directory.
+```{r}
+getwd()
+```
+###Load Packages
+```{r}
+library(readxl)
+library(readr)
+```
+
+###Get the directory containing needed files. This directory contains all processed original files. Processed = converted from excel to csv, combined if necessary with removed columns where necessary.
+```{r}
+datapath = normalizePath("C:/Users/taiqu/Box/01-TaiR-Dissertation-FALL2024/01-DATA-ONLY/00-FIRST-FILES")
+```
+
+##Step 1: Load and clean the comorbidity data
+```{r}
+TG=as.data.frame(read_csv(file.path(datapath,"TG-Comorbidities.csv")))
+CG=as.data.frame(read_csv(file.path(datapath,"CG-Comorbidities.csv")))
+
+## Identify any common patients between the control and test datasets
+inboth=as.character(intersect(TG$de_id_mrn,CG$de_id_mrn))
+
+## Function to clean comorbidity data
+cleancomorbidity=function(input,inboth){
+  print(paste("Before cleaning:",nrow(input)))
+  ## Get rid of extra nameless columns (e.g. "...34")
+  input=input[,!(grepl("\\.\\.\\.",colnames(input)))]
+  ## Get rid of rows with NA values in "de_id_mrn" column
+  input=input[!(is.na(input$de_id_mrn)),]
+  ## Get rid of patients who are in both datasets
+  input=input[!(as.character(input$de_id_mrn)%in%inboth),]
+  ## Loop through every column, remove any row with an NA value
+  for(i in 1:ncol(input)){
+    ## Remove NA values
+    input=input[!(is.na(input[,i])),]
+    ## Ensure data is numeric
+    input[,i]=as.numeric(input[,i])
+    ## Remove NA values (some TG cases have text in the de_id_mrn column)
+    input=input[!(is.na(input[,i])),]
+  }
+  ## For non-unique IDs, just keep the first entry using the duplicated() function
+  input=input[!duplicated(input$de_id_mrn),]
+  print(paste("After cleaning:",nrow(input)))
+  return(input)
+}
+TG=cleancomorbidity(TG,inboth)
+CG=cleancomorbidity(CG,inboth)
+
+#> TG=cleancomorbidity(TG,inboth)
+#[1] "Before cleaning: 225722"
+#[1] "After cleaning: 221608"
+#> CG=cleancomorbidity(CG,inboth)
+#[1] "Before cleaning: 358598"
+#[1] "After cleaning: 353991"
+
+```
+
+##Step 2: Add Demographic Data
+```{r}
+adddemo=function(cobject,csvfile){
+  print(paste("Before demographics:",nrow(cobject)))
+  ## Read in demographics file
+  info=as.data.frame(read_csv(file.path(datapath,csvfile)))
+  info=unique(info)
+  rownames(info)=as.character(info$de_id_mrn)
+  ## Age (also converts all occurrences of "age 89 or above" to "89)
+  cobject$age=info[as.character(cobject$de_id_mrn),"AGE_now_or_at_death"]
+  cobject$age=gsub("age 89 or above", "89", cobject$age)
+  cobject=cobject[!(is.na(cobject$age)),]
+  ## Gender
+  cobject$gender=info[as.character(cobject$de_id_mrn),"gender"]
+  cobject=cobject[cobject$gender%in%c("F","M"),]
+  ## Race
+  cobject$race=info[as.character(cobject$de_id_mrn),"race"]
+  cobject=cobject[!(is.na(cobject$race)),]
+  ## Ethnicity
+  cobject$ethnicity=info[as.character(cobject$de_id_mrn),"ethnicity"]
+  cobject=cobject[!(is.na(cobject$ethnicity)),]
+  ## Return result
+  print(paste("After demographics:",nrow(cobject)))
+  return(cobject)
+}
+TG=adddemo(TG,"TG-Demographic-Data.csv") 
+CG=adddemo(CG,"CG-Demographic-Data.csv")
+
+
+## TG before: 221608
+## TG after:  214190 (221574)
+## CG before: 353991
+## CG after:  348606 (353831)
+
+```
+
+##Step 3: Add Mortality Data
+```{r}
+## Add mortality data (mortality within 30 days and 3 days is also in these files)
+addmort=function(cobject,csvfile){
+  print(paste("Before mortality:",nrow(cobject)))
+  ## Read in mortality file
+  info=as.data.frame(read_csv(file.path(datapath,csvfile)))
+  info=unique(info)
+  rownames(info)=as.character(info$de_id_mrn)
+  
+  ##Encounter Dates
+  cobject$encdates=info[as.character(cobject$de_id_mrn),"de_id_enc_date"]
+  cobject=cobject[!(is.na(cobject$encdates)),]
+  
+  ## ALIVE
+  cobject$alive=info[as.character(cobject$de_id_mrn),"ALIVE_YN"]
+  cobject=cobject[!(is.na(cobject$alive)),]
+  
+  ##Mortality within 3 days
+  cobject$threedays=info[as.character(cobject$de_id_mrn),"Mortality_within_3_days"]
+  cobject=cobject[!(is.na(cobject$threedays)),]
+  
+  ##Mortality within 30 days
+  cobject$thirtydays=info[as.character(cobject$de_id_mrn),"Mortality_within_30_days"]
+  cobject=cobject[!(is.na(cobject$thirtydays)),]
+  
+  ##Mortality same encounter or same day
+  cobject$sameencday=info[as.character(cobject$de_id_mrn),"Mortality_same_enc_or_same_day"]
+  cobject=cobject[!(is.na(cobject$sameencday)),]
+  
+  print(paste("After mortality:",nrow(cobject)))
+  return(cobject)
+}
+TG=addmort(TG,"TG-Mortality.csv")
+CG=addmort(CG,"CG-Mortality.csv")
+
+## TG before: 214190 (221574)
+## TG after:  200684 (207211)
+## CG before: 348606 (353831)
+## CG after:  327390 (332139)
+```
+##Step 4: Add Encounter Data (Hospital Encounters Only), including Hospital, but omitting External Hospital Admission due to uncertain of if the latter is an outpatient visit or transfer from another hospital.
+```{r}
+getencounters = function(cobject, csvfile) {
+  ## Read in the CSV file
+  encounters = as.data.frame(read_csv(file.path(datapath, csvfile)))
+  
+  ## Filter for Hospital Encounter
+  encounters = encounters[encounters$appt_type %in% "Hospital Encounter", ]
+  
+  ## Keep only encounters that match the patients in the input object
+  encounters = encounters[encounters$de_id_mrn %in% cobject$de_id_mrn, ]
+  return(encounters)
+}
+
+# Use it for TG and CG
+TGenc = getencounters(TG, "TG-Encounters.csv")
+CGenc = getencounters(CG, "CG-Encounters.csv")
+
+addencounter = function(cobject, encounters) {
+  print(paste("Before encounters:", nrow(cobject)))
+  cobject$enc_hospital = (cobject$de_id_mrn %in% encounters$de_id_mrn) * 1
+  cobject = cobject[cobject$enc_hospital %in% 1,]
+  print(paste("After encounters:", nrow(cobject)))
+  return(cobject)
+}
+
+TG = addencounter(TG, TGenc)
+CG = addencounter(CG, CGenc)
+
+
+#[1] "Before TG encounters: 207211"
+#[1] "After TG encounters: 164962"
+#[1] "Before CG encounters: 332139"
+#[1] "After CG encounters: 148609"
+```
+##Step 5: Add Length of Stay Data
+### The length of stay days need to be summed. 
+```{r}
+addlos=function(cobject,csvfile){
+   print(paste("Before lengthofstay:",nrow(cobject)))
+   ## Read in los data
+   info=as.data.frame(read_csv(file.path(datapath,csvfile)))
+   ## Convert los to numeric and get rid of rows with NA values
+   info$los_in_days=as.numeric(info$los_in_days)
+   info=info[!(is.na(info$los_in_days)),]
+   ## Sum all los_in_days per patient
+   lossum=aggregate(los_in_days~de_id_mrn,data=info,sum)
+   rownames(lossum)=as.character(lossum$de_id_mrn)
+   ## Add los to object
+   cobject$los_days=lossum[as.character(cobject$de_id_mrn),"los_in_days"]
+   cobject=cobject[!(is.na(cobject$los_days)),]
+   print(paste("After lengthofstay:",nrow(cobject)))
+   return(cobject)
+ }
+TG=addlos(TG,"TG-Length-of-Stay-Data.csv")
+CG=addlos(CG,"CG-Length-of-Stay-Data.csv")
+
+ ## TG before: 164962
+ ## TG after:  115022
+ ## CG before: 148609
+ ## CG after:  44081
+```
+##Step 6: Add Charges Data
+###Similar to LOS, the charges must be summed. 
+```{r}
+fastaddcharges = function(cobject, encounters, charges_file) {
+  print("Starting charge calculations...")
+  
+  # Read in charges CSV
+  charges = read_csv(file.path(datapath, charges_file))
+  
+  # Pre-filter the data frames to only relevant patient records
+  encounters = encounters[encounters$de_id_mrn %in% cobject$de_id_mrn, ]
+  charges = charges[charges$de_id_mrn %in% cobject$de_id_mrn, ]
+  
+  # Create UIDs for matching
+  encounters$UID = paste0(encounters$de_id_mrn, encounters$de_id_enc_date)
+  charges$UID = paste0(charges$de_id_mrn, charges$de_id_enc_date)
+  
+  # Filter charges to only those that match encounters
+  charges = charges[charges$UID %in% encounters$UID, ]
+  
+  # Group charges by patient MRN and sum unique values
+  patient_totals = aggregate(
+    total_value ~ de_id_mrn, 
+    data = unique(charges[, c("de_id_mrn", "de_id_enc_date", "total_value")]), 
+    FUN = sum
+  )
+  
+  # Match totals back to original object
+  cobject$tot_charge = patient_totals$total_value[match(cobject$de_id_mrn, patient_totals$de_id_mrn)]
+  
+  print("Charge calculations complete")
+  return(cobject)
+}
+
+# Process both groups
+TG = fastaddcharges(TG, TGenc, "TG-Charges.csv")
+CG = fastaddcharges(CG, CGenc, "CG-Charges.csv")
+
+# Replace NA values with 0 in tot_charge column. I cross-checked (using "Find") MRN similarities between Dr. CW's final files and mine regarding NA values in the tot_charge column and where there were similarities, I converted the NA values to 0.00, to match what was in CW's final files. This is a researcher's choice.
+TG$tot_charge[is.na(TG$tot_charge)] <- 0
+CG$tot_charge[is.na(CG$tot_charge)] <- 0
+
+# Check for NA values in both objects
+print("Checking for NA values in TG:")
+print(table(is.na(TG)))
+print("\nChecking for NA values in CG:")
+print(table(is.na(CG)))
+
+# Write the charge totals to separate CSV files
+write_csv(data.frame(
+  de_id_mrn = TG$de_id_mrn,
+  tot_charge = TG$tot_charge
+), file.path("TG_charges_totals.csv"))
+
+write_csv(data.frame(
+  de_id_mrn = CG$de_id_mrn,
+  tot_charge = CG$tot_charge
+), file.path("CG_charges_totals.csv"))
+
+# Write the complete final dataframes
+write_csv(TG, file.path("TG_final.csv"))
+write_csv(CG, file.path("CG_final.csv"))
+
+```
+
+##Step 7: Create Combinations of Chronic Diseases in a new column, analyze frequency. Do not create new columns using the combinations, instead, the "combinations" column will be used directly for analyses, still only retaining the most frequently occuring combinations.
+
+```{r}
+library(readr)
+library(dplyr)
+
+#Creating backup dataframes that can be used in the event the primary dataframes are overwritten. 
+CG_backup = CG
+TG_backup = TG
+
+#These dataframes will be used for downstream analyses, especially to create the combinations for the multimorbidity group (TG).
+TG2 = TG
+CG2 = CG
+
+# Function to concatenate column names where the value is 1
+concat_headings <- function(row) {
+  col_names = colnames(TG2)[1:30]  # Include only columns indexed from 1 to 30
+  headings = col_names[row[1:30] == 1]  # Select headings where value is 1
+  return(paste(headings, collapse = "+"))
+}
+
+# Apply the function to each row to create a "combinations" column
+TG2$combinations = apply(TG2[, 1:30], 1, concat_headings)
+
+# Count the number of patients for each unique combination
+combination_counts = as.data.frame(table(TG2$combinations))
+
+# Rename columns for clarity
+colnames(combination_counts) = c("combinations", "patient_count")
+
+# Merge the original TG2 data frame with the combination counts
+# Ensure we keep all original variables in TG2
+TG2 = merge(TG2, combination_counts, by = "combinations", all.x = TRUE)
+
+#Save new dataframe
+TG2 = TG2
+
+# Save the updated TG2 to a CSV file
+write.csv(TG2, "TG2_combos.csv", row.names = FALSE)
+
+# View the updated data frame
+print(head(TG2))
+
+
+## Reduce the dataset to keep only the combinations that occur at least 100 or more times
+# Calculate the frequency of each unique combination
+combination_counts = as.data.frame(table(TG2$combinations))
+
+# Rename columns for clarity
+colnames(combination_counts) = c("combinations", "patient_count")
+
+# Filter combinations with frequency 100 or more
+TG2_filtered_comb_freq = combination_counts[combination_counts$patient_count >= 100, ]
+
+# Reduce the original dataset to keep only rows with these filtered combinations
+TG2 = TG2[TG2$combinations %in% TG2_filtered_comb_freq$combinations, ]
+
+#New Dataframe
+TG2 = TG2
+
+# Save the reduced dataset to a CSV file
+write.csv(TG2, "TG_final_freqcombos.csv", row.names = FALSE)
+
+# View the resulting reduced dataset
+print(head(TG2))
+
+```
+
+##Step 8: Preprocessing step to transform data ahead of statistical analyses
+```{r}
+#Creating new dataframes to use for statistical analyses 
+TGA = TG2
+CGA = CG2 
+
+# Step 1 (High/Low)
+CGA$como_score_hilo = ifelse(CGA$comorbidity_score >= median(CGA$comorbidity_score), 1, 0)
+CGA$van_index_hilo = ifelse(CGA$van_index >= median(CGA$van_index), 1, 0)
+CGA$age_hilo = ifelse(CGA$age >= median(CGA$age), 1, 0)
+CGA$los_days_hilo = ifelse(CGA$los_days >= median(CGA$los_days), 1, 0)
+CGA$tot_charge_hilo = ifelse(CGA$tot_charge >= median(CGA$tot_charge), 1, 0)
+
+TGA$como_score_hilo = ifelse(TGA$comorbidity_score >= median(TGA$comorbidity_score), 1, 0)
+TGA$van_index_hilo = ifelse(TGA$van_index >= median(TGA$van_index), 1, 0)
+TGA$age_hilo = ifelse(TGA$age >= median(TGA$age), 1, 0)
+TGA$los_days_hilo = ifelse(TGA$los_days >= median(TGA$los_days), 1, 0)
+TGA$tot_charge_hilo = ifelse(TGA$tot_charge >= median(TGA$tot_charge), 1, 0)
+
+# Save transformed dataframes
+CGA = CGA
+TGA = TGA
+
+# Print and write to file
+write.csv(CGA, "CGA_txfrm1.csv")
+write.csv(TGA, "TGA_txfrm1.csv")
+
+# Step 2 (Age Groups)
+# Process CGA dataframe
+CGA$age = as.numeric(CGA$age)  # Convert age to numeric
+CGA$age[is.na(CGA$age)] = NA   # Handle non-numeric entries as NA
+CGA$age_groups = cut(CGA$age, 
+                     breaks = c(18, 29, 39, 49, 59, 69, 79, 89), 
+                     labels = c("18-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-89"),
+                     include.lowest = TRUE)  # Categorize into age groups
+
+# Process TGA dataframe
+TGA$age = as.numeric(TGA$age)  # Convert age to numeric
+TGA$age[is.na(TGA$age)] = NA   # Handle non-numeric entries as NA
+TGA$age_groups = cut(TGA$age, 
+                     breaks = c(18, 29, 39, 49, 59, 69, 79, 89), 
+                     labels = c("18-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-89"),
+                     include.lowest = TRUE)  # Categorize into age groups
+
+# View the resulting data frames
+print(head(CGA))
+print(head(TGA))
+
+# Save transformed dataframes
+CGA = CGA
+TGA = TGA
+
+# Print and write to file
+write.csv(CGA, "CGA_txfrm2.csv")
+write.csv(TGA, "TGA_txfrm2.csv")
+
+# Step 3 (LOS Groups)
+CGA$los_groups = cut(CGA$los_days, breaks=c(-Inf, 1, 3, 7, 14, 21, 28, Inf), labels=c("<1 day", "1-3 days", "4-7 days", "8-14 days", "15-21 days", "22-28 days", "29+ days"))
+
+TGA$los_groups = cut(TGA$los_days, breaks=c(-Inf, 1, 3, 7, 14, 21, 28, Inf), labels=c("<1 day", "1-3 days", "4-7 days", "8-14 days", "15-21 days", "22-28 days", "29+ days"))
+
+# Save transformed dataframes
+CGA = CGA
+TGA = TGA
+
+# Print and write to file
+write.csv(CGA, "CGA_txfrm3.csv")
+write.csv(TGA, "TGA_txfrm3.csv")
+
+# Step 4a (CGA Ethnicity) Initially "Hispanic or Latino" was excluded due to the extra space before Latino
+CGA$eth_corrected <- ifelse(CGA$ethnicity %in% c("Hispanic or  Latino", "Hispanic/Latino: Not Specified/Unknown", "Hispanic/Latino: Other", "Mexican", "Puerto Rican (Island)", "Puerto Rican (Mainland)", "Cuban"), "Hispanic/Latino/Spanish", "Non-Hispanic/Latino/Spanish")
+
+# Save transformed dataframes
+CGA = CGA
+
+# Print and write to file
+write.csv(CGA, "CGA_txfrm4.csv")
+
+# Step 4b (TGA Ethnicity)
+TGA$eth_corrected <- ifelse(TGA$ethnicity %in% c("Cuban", "Puerto Rican (Island)", "Hispanic/Latino: Other", "Mexican", "Hispanic/Latino: Not Specified/Unknown", "Hispanic or  Latino"), "Hispanic/Latino/Spanish", "Non-Hispanic/Latino/Spanish")
+
+# Save transformed dataframes
+TGA = TGA
+
+# Print and write to file
+write.csv(TGA, "TGA_txfrm4.csv")
+
+# Step 5 (Race Limits)
+CGA$race_corrected = ifelse(CGA$race %in% c("White", "Black or African American"), CGA$race, "Other")
+TGA$race_corrected = ifelse(TGA$race %in% c("White", "Black or African American"), TGA$race, "Other")
+
+# Save transformed dataframes
+CGA = CGA
+TGA = TGA
+
+# Print and write to file
+write.csv(CGA, "CGA_txfrm5.csv")
+write.csv(TGA, "TGA_txfrm5.csv")
+
+# Step 6 (Combination Counts for TGA)
+# Count the number of "+" in each cell of the "combinations" column
+TGA$combo_cts = sapply(TGA$combinations, function(x) {
+  sum(strsplit(x, "\\+")[[1]] != "") - 1
+})
+
+# Assign categories to a new column "combo_cat" based on "combo_cts"
+TGA$combo_cat = ifelse(TGA$combo_cts == 1, "dyad",
+                 ifelse(TGA$combo_cts == 2, "triad",
+                 ifelse(TGA$combo_cts == 3, "tetrad",
+                 ifelse(TGA$combo_cts >= 4, "pentad", NA))))
+
+# Save transformed dataframes
+TGA = TGA
+
+# Save transformed dataframe
+write.csv(TGA, "TGA_txfrm6.csv"
+          )
+# View the resulting dataframe
+table(TGA$combo_cat)
+
+# Step 7 (Gender to Sex)
+names(CGA)[names(CGA) == "gender"] = "sex"
+names(TGA)[names(TGA) == "gender"] = "sex"
+
+# Save transformed dataframes
+CGA = CGA
+TGA = TGA
+
+# Print and write to file
+write.csv(CGA, "CGA_txfrm7.csv")
+write.csv(TGA, "TGA_txfrm7.csv")
+
+# Step 8 (van Groups)
+# Handle CGA dataframe
+van_breaks_CGA = unique(quantile(CGA$van_index, probs = seq(0, 1, by = 0.25), na.rm = TRUE))
+
+# Ensure there are enough unique breakpoints; otherwise, adjust
+if (length(van_breaks_CGA) < 5) {
+  van_breaks_CGA = seq(min(CGA$van_index, na.rm = TRUE), 
+                       max(CGA$van_index, na.rm = TRUE), 
+                       length.out = 5)
+}
+
+# Create groups for CGA without labels
+CGA$van_groups = cut(CGA$van_index, 
+                     breaks = van_breaks_CGA, 
+                     include.lowest = TRUE)
+
+# Print the breakpoints for CGA
+cat("CGA van_index breakpoints:\n")
+print(van_breaks_CGA)
+
+# Handle TGA dataframe
+van_breaks_TGA = unique(quantile(TGA$van_index, probs = seq(0, 1, by = 0.25), na.rm = TRUE))
+
+# Ensure there are enough unique breakpoints; otherwise, adjust
+if (length(van_breaks_TGA) < 5) {
+  van_breaks_TGA = seq(min(TGA$van_index, na.rm = TRUE), 
+                       max(TGA$van_index, na.rm = TRUE), 
+                       length.out = 5)
+}
+
+# Create groups for TGA without labels
+TGA$van_groups = cut(TGA$van_index, 
+                     breaks = van_breaks_TGA, 
+                     include.lowest = TRUE)
+
+# Print the breakpoints for TGA
+cat("TGA van_index breakpoints:\n")
+print(van_breaks_TGA)
+
+# Save transformed dataframes
+CGA = CGA
+TGA = TGA
+
+# Save the transformed dataframes
+write.csv(CGA, "CGA_txfrm8.csv", row.names = FALSE)
+write.csv(TGA, "TGA_txfrm8.csv", row.names = FALSE)
+
+# View a preview of the updated dataframes
+print(head(CGA))
+print(head(TGA))
+```
+
+##Step 9: OMIT Data exploration (Control) (03052025-omitting since restructuring)
+```{r}
+##Prevalence of comorbidity scores
+print('Prevalence of Comorbidity Scores')
+CG_comscoretable = table(CG$comorbidity_score)
+CG_comscoreperc = CG_comscoretable/sum(CG_comscoretable)*100
+print(CG_comscoreperc)
+
+##Create plot of the Van Index
+print('Barplot of Van Index')
+barplot(table(CG$van_index))
+
+##Create plot of age distribution
+print('Age Distribution')
+barplot(table(CG$age))
+
+##Gender Prevalence
+print('Gender Prevalence')
+CG_gendertable= table(CG$gender)
+CG_genderperc = CG_gendertable/sum(CG_gendertable)*100
+print(CG_genderperc)
+
+##Race Prevalence
+print('Race Prevalence')
+CG_racetable = sort(table(CG$race))
+CG_raceperc = CG_racetable/sum(CG_racetable)*100
+print(CG_raceperc)
+
+##Ethnicity prevalence
+##Ethnicity is the least clean column in the entire dataset. For the sake of time, it will be handled by subtracting the prevalence of Hispanic/Latino (8.32%) from 100% and including all other data as Non-Hispanic or Latino (91.68%).
+print('Ethnicity Prevalence')
+CG_ethtable = sort(table(CG$eth_corr))
+CG_ethperc = CG_ethtable/sum(CG_ethtable)*100
+print(CG_ethperc)
+
+##Mortality Prevalence
+print("'Mortality Prevalence', 'alive', '3-days', '30-days', 'Same-Enc-or-Day'")
+CG_morttable1 = sort(table(CG$alive))
+CG_morttable2 = sort(table(CG$threedays))
+CG_morttable3 = sort(table(CG$thirtydays))
+CG_morttable4 = sort(table(CG$sameencday))
+CG_mortperc1 = CG_morttable1/sum(CG_morttable1)*100
+CG_mortperc2 = CG_morttable2/sum(CG_morttable2)*100
+CG_mortperc3 = CG_morttable3/sum(CG_morttable3)*100
+CG_mortperc4 = CG_morttable4/sum(CG_morttable4)*100
+print(CG_mortperc1)
+print(CG_mortperc2)
+print(CG_mortperc3)
+print(CG_mortperc4)
+
+#Length of Stay Distribution
+print('LOS Distribution')
+summary(CG$los_days)
+
+#Total Charge Distribution
+print('Total Charge Distribution')
+summary(CG$tot_charge)
+
+hist(CG$tot_charge, breaks = 10000,xlim=c(0,1e05))
+```
+
+##Step 10: OMIT Data exploration (Test) (03052025-omitting since restructuring)
+```{r}
+##Prevalence of comorbidity scores
+print('Prevalence of Comorbidity Scores')
+TG_comscoretable = table(TG$comorbidity_score)
+TG_comscoreperc = TG_comscoretable/sum(TG_comscoretable)*100
+print(TG_comscoreperc)
+
+##Create plot of the Van Index
+print('Barplot of Van Index')
+barplot(table(TG$van_index))
+
+##Create plot of age distribution
+print('Age Distribution')
+barplot(table(TG$age))
+
+##Gender Prevalence
+print('Gender Prevalence')
+TG_gendertable= table(TG$gender)
+TG_genderperc = TG_gendertable/sum(TG_gendertable)*100
+print(TG_genderperc)
+
+##Race Prevalence
+print('Race Prevalence')
+TG_racetable = sort(table(TG$race))
+TG_raceperc = TG_racetable/sum(TG_racetable)*100
+print(TG_raceperc)
+
+##Ethnicity prevalence
+##Ethnicity is the least clean column in the entire dataset. For the sake of time, it will be handled by subtracting the prevalence of Hispanic/Latino (8.32%) from 100% and including all other data as Non-Hispanic or Latino (91.68%).
+print('Ethnicity Prevalence')
+TG_ethtable = sort(table(TG$ethnicity))
+TG_ethperc = TG_ethtable/sum(TG_ethtable)*100
+print(TG_ethperc)
+
+##Mortality Prevalence
+print("'Mortality Prevalence', 'alive', '3-days', '30-days', 'Same-Enc-or-Day'")
+TG_morttable1 = sort(table(TG$alive))
+TG_morttable2 = sort(table(TG$threedays))
+TG_morttable3 = sort(table(TG$thirtydays))
+TG_morttable4 = sort(table(TG$sameencday))
+TG_mortperc1 = TG_morttable1/sum(TG_morttable1)*100
+TG_mortperc2 = TG_morttable2/sum(TG_morttable2)*100
+TG_mortperc3 = TG_morttable3/sum(TG_morttable3)*100
+TG_mortperc4 = TG_morttable4/sum(TG_morttable4)*100
+print(TG_mortperc1)
+print(TG_mortperc2)
+print(TG_mortperc3)
+print(TG_mortperc4)
+
+#Length of Stay Distribution
+print('LOS Distribution')
+summary(TG$los_days)
+
+#Total Charge Distribution
+print('Total Charge Distribution')
+summary(TG$tot_charge)
+
+hist(TG$tot_charge, breaks = 10000,xlim=c(0,1e05))
+```
+
+
+
+
+##OMIT##Step XXX: Create Combinations of Chronic Diseases in a new column, analyze frequency, use frequency >= 100 (PI's cut point) patients/records to create new combination columns (N=100), assign 0 or 1 as cell value if chronic disease present in combination is also present in individual columns of the original rows. !!!!!There is a problem with this script. It does not account for the fact that a patient/record can have multiple combinations of the same diseases in dyad, triad, etc. For instance, someone with diseases w, x, y, z could be found in 3 places on the combinations table when the combinations are arranged in individual columns. w+x, w+x+y, w+x+y+z. This results in an unusually high count of occurences. 
+```{r}
+library(readr)
+library(dplyr)
+
+datapath2 = normalizePath("C:/Users/taiqu/Box/01-TaiR-Dissertation-FALL2024/07-New-R-Scripts")
+
+#Calling the previously saved final files as the dataframe in a reset due to previous error with a combination script that wrote over TG & CG dataframes. These will stay as TG and CG for reruns of upstream scripts. 
+TG=as.data.frame(read_csv(file.path(datapath2,"TG_final.csv")))
+CG=as.data.frame(read_csv(file.path(datapath2,"CG_final.csv")))
+
+#Creating backup dataframes that can be used in the event the primary dataframes are overwritten. 
+CG_backup = CG
+TG_backup = TG
+
+#These dataframes will be used for downstream analyses, especially to create the combinations for the multimorbidity group (TG).
+TG2 = TG
+CG2 = CG
+
+
+# Function to concatenate column names where the value is 1
+concat_headings <- function(row) {
+  col_names = colnames(TG2)[1:30]  # Include only columns indexed from 1 to 30
+  headings = col_names[row[1:30] == 1]  # Select headings where value is 1
+  return(paste(headings, collapse = "."))
+}
+
+# Apply the function to each row and create a new column
+TG2$combinations = apply(TG2, 1, concat_headings)
+
+# View the updated data frame
+print(TG2)
+
+# View the combinations in a dataframe and write to csv
+combinations = as.data.frame(sort(table(TG2$combinations)))
+print(combinations)
+write.csv(combinations, "TG2Combos.csv")
+
+# Calculate the frequency of each unique combination (requires dplyr package)
+TG2_comb_freq = group_by(TG2, combinations)
+TG2_comb_freq = summarise(TG2_comb_freq, n = n())
+
+# Filter to return only rows where the frequency is greater than 100
+TG2_filtered_comb_freq = TG2_comb_freq[TG2_comb_freq$n >= 100, ]
+
+# Create a new column for filtered combinations in the original TG2 dataframe
+TG2$filtered_combination = ifelse(TG2$combinations %in% TG2_filtered_comb_freq$combinations, 1, 0)
+
+# Keep only the rows that have combinations matching the filtered combinations
+TG2 = TG2[TG2$filtered_combination == 1, ]
+
+# Update the original TG2 data frame with new columns for filtered combinations
+for (combo in TG2_filtered_comb_freq$combinations) {
+  combo_cols = strsplit(combo, "\\.")[[1]]
+  TG2[[combo]] = apply(TG2[combo_cols], 1, function(row) as.integer(all(row == 1)))
+}
+
+# Remove the temporary filtered_combination column
+TG2$filtered_combination = NULL
+
+# View the final filtered TG2 data frame
+print(TG2)
+write.csv(TG2, "TG2_combos_allvar.csv")
+```
+
+####END OF CLEANING FILE####
